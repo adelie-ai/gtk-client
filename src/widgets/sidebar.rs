@@ -4,7 +4,7 @@ use std::rc::Rc;
 use desktop_assistant_client_common::ConversationSummary;
 use gtk4::prelude::*;
 use gtk4::{
-    Box as GtkBox, Button, GestureClick, Label, ListBox, ListBoxRow, Orientation, Popover,
+    Box as GtkBox, Button, GestureClick, Image, Label, ListBox, ListBoxRow, Orientation, Popover,
     ScrolledWindow, SelectionMode,
 };
 
@@ -24,6 +24,28 @@ impl Sidebar {
     pub fn new() -> Self {
         let container = GtkBox::new(Orientation::Vertical, 0);
         container.set_width_request(280);
+
+        // Adele branding icon
+        let brand_box = GtkBox::new(Orientation::Horizontal, 8);
+        brand_box.set_margin_start(12);
+        brand_box.set_margin_top(10);
+        brand_box.set_margin_bottom(4);
+
+        const ICON_BYTES: &[u8] = include_bytes!("../../assets/adele_communicating.png");
+        let icon_path = std::env::temp_dir().join("adelie-gtk-brand-icon.png");
+        if !icon_path.exists() {
+            let _ = std::fs::write(&icon_path, ICON_BYTES);
+        }
+        let icon = Image::from_file(icon_path.to_str().unwrap_or_default());
+        icon.set_pixel_size(44);
+        brand_box.append(&icon);
+
+        let title_label = Label::new(Some("Adele Desktop Assistant"));
+        title_label.add_css_class("brand-title");
+        title_label.set_valign(gtk4::Align::Center);
+        brand_box.append(&title_label);
+
+        container.append(&brand_box);
 
         let header = Label::new(Some("Conversations"));
         header.add_css_class("sidebar-header");

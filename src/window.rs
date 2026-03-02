@@ -9,7 +9,7 @@ use desktop_assistant_client_common::{
 use gtk4::prelude::*;
 use gtk4::{
     Application, ApplicationWindow, Box as GtkBox, Button, CheckButton, Entry, Label, Orientation,
-    Separator, Window, gdk, glib,
+    Paned, Separator, Window, gdk, glib,
 };
 use tokio::sync::mpsc;
 
@@ -49,6 +49,9 @@ impl AdelieWindow {
             .default_height(700)
             .build();
 
+        // Set application icon for taskbar
+        install_app_icon();
+
         // Apply CSS
         let provider = gtk4::CssProvider::new();
         provider.load_from_data(include_str!("style.css"));
@@ -58,14 +61,15 @@ impl AdelieWindow {
             gtk4::STYLE_PROVIDER_PRIORITY_APPLICATION,
         );
 
-        // Layout
-        let main_box = GtkBox::new(Orientation::Horizontal, 0);
+        // Layout: resizable paned split between sidebar and chat
+        let paned = Paned::new(Orientation::Horizontal);
 
         let sidebar = Sidebar::new();
-        main_box.append(&sidebar.container);
-
-        let separator = Separator::new(Orientation::Vertical);
-        main_box.append(&separator);
+        sidebar.container.set_size_request(280, -1); // minimum width
+        paned.set_start_child(Some(&sidebar.container));
+        paned.set_resize_start_child(false);
+        paned.set_shrink_start_child(false);
+        paned.set_position(280);
 
         let right_box = GtkBox::new(Orientation::Vertical, 0);
         right_box.set_hexpand(true);
@@ -99,8 +103,10 @@ impl AdelieWindow {
 
         right_box.append(&status_bar);
 
-        main_box.append(&right_box);
-        window.set_child(Some(&main_box));
+        paned.set_end_child(Some(&right_box));
+        paned.set_resize_end_child(true);
+        paned.set_shrink_end_child(false);
+        window.set_child(Some(&paned));
 
         // Shared state
         let state = Rc::new(RefCell::new(WindowState {
@@ -614,6 +620,41 @@ fn handle_ui_message(
             status_label.set_text(&format!("Error: {text}"));
         }
     }
+}
+
+/// Install the Adele icon into the GTK icon theme so it appears in the taskbar.
+///
+/// Writes the embedded PNG to a temporary hicolor icon theme directory and adds
+/// it to the display's icon search path. Uses the app ID as the icon name so
+/// the desktop environment can match it to the window.
+fn install_app_icon() {
+    const ICON_BYTES: &[u8] = include_bytes!("../assets/adele.png");
+    const ICON_NAME: &str = "org.adelie.DesktopAssistant";
+
+    let icon_dir = std::env::temp_dir()
+        .join("adelie-gtk-icons")
+        .join("hicolor")
+        .join("512x512")
+        .join("apps");
+    let icon_path = icon_dir.join(format!("{ICON_NAME}.png"));
+
+    if !icon_path.exists() {
+        if let Err(e) = std::fs::create_dir_all(&icon_dir) {
+            tracing::warn!("Failed to create icon dir: {e}");
+            return;
+        }
+        if let Err(e) = std::fs::write(&icon_path, ICON_BYTES) {
+            tracing::warn!("Failed to write icon: {e}");
+            return;
+        }
+    }
+
+    let theme_root = std::env::temp_dir().join("adelie-gtk-icons");
+    let display = gdk::Display::default().expect("display");
+    let icon_theme = gtk4::IconTheme::for_display(&display);
+    icon_theme.add_search_path(theme_root.to_str().unwrap_or_default());
+
+    gtk4::Window::set_default_icon_name(ICON_NAME);
 }
 
 /// Filter a conversation's messages based on debug mode.

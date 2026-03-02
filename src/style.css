@@ -5,6 +5,12 @@ window {
     color: #e0e0e0;
 }
 
+.brand-title {
+    font-weight: bold;
+    font-size: 16px;
+    color: #84dac1;
+}
+
 .sidebar-header {
     font-weight: bold;
     font-size: 14px;
@@ -63,6 +69,11 @@ separator {
     background-color: #2a2e45;
     min-width: 1px;
     min-height: 1px;
+}
+
+paned > separator {
+    background-color: #2a2e45;
+    min-width: 2px;
 }
 
 .context-popover {
