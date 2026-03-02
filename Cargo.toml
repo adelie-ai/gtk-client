@@ -1,0 +1,32 @@
+[package]
+name = "adelie-gtk"
+version = "0.1.0"
+edition = "2024"
+license = "AGPL-3.0-or-later"
+
+[[bin]]
+name = "adelie-gtk"
+path = "src/main.rs"
+
+[features]
+default = ["linux"]
+linux = ["dep:webkit6", "desktop-assistant-client-common/dbus"]
+
+[dependencies]
+anyhow = "1"
+clap = { version = "4", features = ["derive", "env"] }
+gtk4 = { version = "0.9", package = "gtk4" }
+pulldown-cmark = { version = "0.12", default-features = false, features = ["html"] }
+tokio = { version = "1", features = ["full"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+[dependencies.webkit6]
+version = "0.4"
+optional = true
+
+[dependencies.desktop-assistant-client-common]
+path = "../desktop-assistant/crates/client-common"
+
+[dependencies.desktop-assistant-api-model]
+path = "../desktop-assistant/crates/api-model"

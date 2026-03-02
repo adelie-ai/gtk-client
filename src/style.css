@@ -1,0 +1,66 @@
+/* Adelie GTK Client Styles */
+
+window {
+    background-color: #1a1d2e;
+    color: #e0e0e0;
+}
+
+.sidebar-header {
+    font-weight: bold;
+    font-size: 14px;
+    color: #88d6f0;
+}
+
+.conversation-list row {
+    padding: 4px 0;
+    border-radius: 6px;
+}
+
+.conversation-list row:selected {
+    background-color: #4866b4;
+    color: #f5f8ff;
+}
+
+.dim-label {
+    color: #7c8494;
+    font-size: 12px;
+}
+
+.new-conversation-button {
+    border-radius: 6px;
+}
+
+.input-textview {
+    background-color: #232740;
+    color: #e0e0e0;
+    border-radius: 8px;
+    caret-color: #84dac1;
+}
+
+.input-textview text {
+    background-color: #232740;
+    color: #e0e0e0;
+}
+
+.send-button {
+    border-radius: 6px;
+    min-height: 36px;
+    padding-left: 16px;
+    padding-right: 16px;
+}
+
+.status-bar {
+    color: #8f99ae;
+    font-size: 12px;
+}
+
+.debug-check {
+    color: #e0e0e0;
+    margin-end: 12px;
+}
+
+separator {
+    background-color: #2a2e45;
+    min-width: 1px;
+    min-height: 1px;
+}
