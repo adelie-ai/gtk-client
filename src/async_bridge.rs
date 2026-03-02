@@ -25,6 +25,13 @@ pub enum UiMessage {
     ConversationCreated {
         id: String,
     },
+    ConversationDeleted {
+        id: String,
+    },
+    ConversationRenamed {
+        id: String,
+        title: String,
+    },
     StreamChunk {
         request_id: String,
         chunk: String,

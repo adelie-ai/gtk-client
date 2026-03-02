@@ -8,8 +8,8 @@ use desktop_assistant_client_common::{
 };
 use gtk4::prelude::*;
 use gtk4::{
-    Application, ApplicationWindow, Box as GtkBox, CheckButton, Label, Orientation, Separator, gdk,
-    glib,
+    Application, ApplicationWindow, Box as GtkBox, Button, CheckButton, Entry, Label, Orientation,
+    Separator, Window, gdk, glib,
 };
 use tokio::sync::mpsc;
 
@@ -254,6 +254,129 @@ impl AdelieWindow {
             });
         }
 
+        // Context menu: Delete conversation
+        {
+            let client_ref = Rc::clone(&client);
+            let bridge = Rc::clone(&bridge);
+            let state = Rc::clone(&state);
+            sidebar.connect_delete(move |idx| {
+                let id = {
+                    let s = state.borrow();
+                    match s.conversations.get(idx) {
+                        Some(conv) => conv.id.clone(),
+                        None => return,
+                    }
+                };
+                if let Some(client) = client_ref.borrow().clone() {
+                    let tx = bridge.ui_sender();
+                    let id = id.clone();
+                    bridge.spawn(async move {
+                        match client.delete_conversation(&id).await {
+                            Ok(()) => {
+                                let _ = tx.send(UiMessage::ConversationDeleted { id });
+                            }
+                            Err(e) => {
+                                let _ = tx
+                                    .send(UiMessage::Error(format!("Delete conversation: {e}")));
+                            }
+                        }
+                    });
+                }
+            });
+        }
+
+        // Context menu: Rename conversation
+        {
+            let client_ref = Rc::clone(&client);
+            let bridge = Rc::clone(&bridge);
+            let state = Rc::clone(&state);
+            let window_ref = window.clone();
+            sidebar.connect_rename(move |idx| {
+                let (id, current_title) = {
+                    let s = state.borrow();
+                    match s.conversations.get(idx) {
+                        Some(conv) => (conv.id.clone(), conv.title.clone()),
+                        None => return,
+                    }
+                };
+
+                let dialog = Window::builder()
+                    .title("Rename Conversation")
+                    .transient_for(&window_ref)
+                    .modal(true)
+                    .default_width(360)
+                    .default_height(10)
+                    .resizable(false)
+                    .build();
+
+                let vbox = GtkBox::new(Orientation::Vertical, 8);
+                vbox.set_margin_start(16);
+                vbox.set_margin_end(16);
+                vbox.set_margin_top(16);
+                vbox.set_margin_bottom(16);
+
+                let entry = Entry::new();
+                entry.set_text(&current_title);
+                entry.set_activates_default(true);
+                vbox.append(&entry);
+
+                let btn_box = GtkBox::new(Orientation::Horizontal, 8);
+                btn_box.set_halign(gtk4::Align::End);
+
+                let cancel_btn = Button::with_label("Cancel");
+                let dialog_ref = dialog.clone();
+                cancel_btn.connect_clicked(move |_| {
+                    dialog_ref.close();
+                });
+                btn_box.append(&cancel_btn);
+
+                let confirm_btn = Button::with_label("Rename");
+                confirm_btn.add_css_class("suggested-action");
+                let client_ref_inner = Rc::clone(&client_ref);
+                let bridge_inner = Rc::clone(&bridge);
+                let dialog_ref = dialog.clone();
+                let entry_ref = entry.clone();
+                confirm_btn.connect_clicked(move |_| {
+                    let new_title = entry_ref.text().trim().to_string();
+                    if new_title.is_empty() {
+                        return;
+                    }
+                    dialog_ref.close();
+                    if let Some(client) = client_ref_inner.borrow().clone() {
+                        let tx = bridge_inner.ui_sender();
+                        let id = id.clone();
+                        let title = new_title.clone();
+                        bridge_inner.spawn(async move {
+                            match client.rename_conversation(&id, &title).await {
+                                Ok(()) => {
+                                    let _ = tx.send(UiMessage::ConversationRenamed {
+                                        id,
+                                        title,
+                                    });
+                                }
+                                Err(e) => {
+                                    let _ = tx.send(UiMessage::Error(format!(
+                                        "Rename conversation: {e}"
+                                    )));
+                                }
+                            }
+                        });
+                    }
+                });
+                btn_box.append(&confirm_btn);
+
+                // Enter key in entry confirms
+                let confirm_ref = confirm_btn.clone();
+                entry.connect_activate(move |_| {
+                    confirm_ref.emit_clicked();
+                });
+
+                vbox.append(&btn_box);
+                dialog.set_child(Some(&vbox));
+                dialog.present();
+            });
+        }
+
         // Send button / Enter key → send prompt
         {
             let client_ref = Rc::clone(&client);
@@ -388,6 +511,32 @@ fn handle_ui_message(
         }
         UiMessage::ConversationCreated { id } => {
             state.borrow_mut().current_conversation_id = Some(id);
+        }
+        UiMessage::ConversationDeleted { id } => {
+            let mut s = state.borrow_mut();
+            s.conversations.retain(|c| c.id != id);
+            let is_active = s.current_conversation_id.as_deref() == Some(&id);
+            if is_active {
+                s.current_conversation_id = None;
+                s.current_conversation = None;
+            }
+            let convs = s.conversations.clone();
+            drop(s);
+            sidebar.set_conversations(&convs);
+            if is_active {
+                chat_view.borrow_mut().clear();
+            }
+        }
+        UiMessage::ConversationRenamed { id, title } => {
+            let mut s = state.borrow_mut();
+            for conv in &mut s.conversations {
+                if conv.id == id {
+                    conv.title = title.clone();
+                }
+            }
+            let convs = s.conversations.clone();
+            drop(s);
+            sidebar.set_conversations(&convs);
         }
         UiMessage::PromptSent { request_id } => {
             let mut s = state.borrow_mut();

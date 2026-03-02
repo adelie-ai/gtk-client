@@ -1,8 +1,14 @@
+use std::cell::RefCell;
+use std::rc::Rc;
+
 use desktop_assistant_client_common::ConversationSummary;
 use gtk4::prelude::*;
 use gtk4::{
-    Box as GtkBox, Button, Label, ListBox, ListBoxRow, Orientation, ScrolledWindow, SelectionMode,
+    Box as GtkBox, Button, GestureClick, Label, ListBox, ListBoxRow, Orientation, Popover,
+    ScrolledWindow, SelectionMode,
 };
+
+type IndexCallback = Box<dyn Fn(usize)>;
 
 /// Sidebar widget displaying the conversation list and a "New" button.
 pub struct Sidebar {
@@ -10,6 +16,8 @@ pub struct Sidebar {
     pub list_box: ListBox,
     pub new_button: Button,
     pub scrolled_window: ScrolledWindow,
+    on_rename: Rc<RefCell<Option<IndexCallback>>>,
+    on_delete: Rc<RefCell<Option<IndexCallback>>>,
 }
 
 impl Sidebar {
@@ -47,7 +55,19 @@ impl Sidebar {
             list_box,
             new_button,
             scrolled_window,
+            on_rename: Rc::new(RefCell::new(None)),
+            on_delete: Rc::new(RefCell::new(None)),
         }
+    }
+
+    /// Register a callback for when the user chooses "Rename" from the context menu.
+    pub fn connect_rename<F: Fn(usize) + 'static>(&self, f: F) {
+        *self.on_rename.borrow_mut() = Some(Box::new(f));
+    }
+
+    /// Register a callback for when the user chooses "Delete" from the context menu.
+    pub fn connect_delete<F: Fn(usize) + 'static>(&self, f: F) {
+        *self.on_delete.borrow_mut() = Some(Box::new(f));
     }
 
     /// Replace the conversation list contents.
@@ -57,7 +77,7 @@ impl Sidebar {
             self.list_box.remove(&child);
         }
 
-        for conv in conversations {
+        for (idx, conv) in conversations.iter().enumerate() {
             let row = ListBoxRow::new();
             let hbox = GtkBox::new(Orientation::Horizontal, 8);
             hbox.set_margin_start(12);
@@ -76,6 +96,57 @@ impl Sidebar {
             hbox.append(&count_label);
 
             row.set_child(Some(&hbox));
+
+            // Right-click context menu
+            let gesture = GestureClick::new();
+            gesture.set_button(3); // secondary (right) click
+            let on_rename = Rc::clone(&self.on_rename);
+            let on_delete = Rc::clone(&self.on_delete);
+            gesture.connect_pressed(move |gesture, _n_press, x, y| {
+                let Some(widget) = gesture.widget() else {
+                    return;
+                };
+
+                let popover = Popover::new();
+                popover.add_css_class("context-popover");
+                popover.set_parent(&widget);
+                popover.set_pointing_to(Some(&gtk4::gdk::Rectangle::new(
+                    x as i32, y as i32, 1, 1,
+                )));
+                popover.set_has_arrow(false);
+
+                let menu_box = GtkBox::new(Orientation::Vertical, 0);
+
+                let rename_btn = Button::with_label("Rename");
+                rename_btn.add_css_class("context-button");
+                let on_rename_inner = Rc::clone(&on_rename);
+                let popover_ref = popover.clone();
+                rename_btn.connect_clicked(move |_| {
+                    popover_ref.popdown();
+                    if let Some(ref cb) = *on_rename_inner.borrow() {
+                        cb(idx);
+                    }
+                });
+                menu_box.append(&rename_btn);
+
+                let delete_btn = Button::with_label("Delete");
+                delete_btn.add_css_class("context-button");
+                delete_btn.add_css_class("destructive-action");
+                let on_delete_inner = Rc::clone(&on_delete);
+                let popover_ref = popover.clone();
+                delete_btn.connect_clicked(move |_| {
+                    popover_ref.popdown();
+                    if let Some(ref cb) = *on_delete_inner.borrow() {
+                        cb(idx);
+                    }
+                });
+                menu_box.append(&delete_btn);
+
+                popover.set_child(Some(&menu_box));
+                popover.popup();
+            });
+            row.add_controller(gesture);
+
             self.list_box.append(&row);
         }
     }
