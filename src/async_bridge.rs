@@ -1,7 +1,12 @@
 use std::future::Future;
+use std::sync::Arc;
 use std::sync::OnceLock;
 
 use desktop_assistant_client_common::SignalEvent;
+use desktop_assistant_client_common::{
+    AssistantClient, ConnectionConfig, TransportClient, connect_transport,
+    transport::transport_label,
+};
 use gtk4::glib;
 use tokio::runtime::Runtime;
 use tokio::sync::mpsc;
@@ -51,8 +56,19 @@ pub enum UiMessage {
     PromptSent {
         request_id: String,
     },
+    Connected {
+        label: String,
+    },
+    Disconnected {
+        reason: String,
+    },
     StatusUpdate(String),
     Error(String),
+}
+
+/// Internal message for delivering a new client to the GTK main thread.
+pub enum InternalMsg {
+    ClientReady(Arc<TransportClient>),
 }
 
 /// Bridge between the GTK main loop and tokio async tasks.
@@ -93,38 +109,118 @@ impl AsyncBridge {
     pub fn ui_sender(&self) -> mpsc::UnboundedSender<UiMessage> {
         self.ui_tx.clone()
     }
+}
 
-    /// Start forwarding SignalEvents from the transport to UiMessages on the GTK thread.
-    pub fn forward_signals(&self, mut signal_rx: mpsc::UnboundedReceiver<SignalEvent>) {
-        let tx = self.ui_tx.clone();
-        runtime().spawn(async move {
-            while let Some(signal) = signal_rx.recv().await {
-                let msg = match signal {
-                    SignalEvent::Chunk { request_id, chunk } => {
-                        UiMessage::StreamChunk { request_id, chunk }
+/// Persistent connection lifecycle: connect → forward signals → detect
+/// disconnect → reconnect with exponential backoff.
+///
+/// Exits when `ui_tx` is closed (GTK window gone).
+pub async fn connection_manager(
+    config: ConnectionConfig,
+    ui_tx: mpsc::UnboundedSender<UiMessage>,
+    internal_tx: mpsc::UnboundedSender<InternalMsg>,
+) {
+    const INITIAL_BACKOFF_SECS: u64 = 2;
+    const MAX_BACKOFF_SECS: u64 = 30;
+
+    let mut backoff_secs = INITIAL_BACKOFF_SECS;
+
+    loop {
+        match connect_transport(&config).await {
+            Ok((transport, mut signal_rx)) => {
+                backoff_secs = INITIAL_BACKOFF_SECS;
+                let transport = Arc::new(transport);
+
+                let label = transport_label(config.transport_mode).to_string();
+                if ui_tx.send(UiMessage::Connected { label }).is_err() {
+                    return;
+                }
+
+                if internal_tx
+                    .send(InternalMsg::ClientReady(Arc::clone(&transport)))
+                    .is_err()
+                {
+                    return;
+                }
+
+                // Refresh conversation list on connect
+                match transport.list_conversations().await {
+                    Ok(convs) => {
+                        if ui_tx.send(UiMessage::ConversationsLoaded(convs)).is_err() {
+                            return;
+                        }
                     }
-                    SignalEvent::Complete {
-                        request_id,
-                        full_response,
-                    } => UiMessage::StreamComplete {
-                        request_id,
-                        full_response,
-                    },
-                    SignalEvent::Error { request_id, error } => {
-                        UiMessage::StreamError { request_id, error }
+                    Err(e) => {
+                        if ui_tx
+                            .send(UiMessage::Error(format!("Load conversations: {e}")))
+                            .is_err()
+                        {
+                            return;
+                        }
                     }
-                    SignalEvent::TitleChanged {
-                        conversation_id,
-                        title,
-                    } => UiMessage::TitleChanged {
-                        conversation_id,
-                        title,
-                    },
-                };
-                if tx.send(msg).is_err() {
-                    break;
+                }
+
+                // Forward signals until disconnect
+                while let Some(signal) = signal_rx.recv().await {
+                    let msg = match signal {
+                        SignalEvent::Chunk { request_id, chunk } => {
+                            UiMessage::StreamChunk { request_id, chunk }
+                        }
+                        SignalEvent::Complete {
+                            request_id,
+                            full_response,
+                        } => UiMessage::StreamComplete {
+                            request_id,
+                            full_response,
+                        },
+                        SignalEvent::Error { request_id, error } => {
+                            UiMessage::StreamError { request_id, error }
+                        }
+                        SignalEvent::TitleChanged {
+                            conversation_id,
+                            title,
+                        } => UiMessage::TitleChanged {
+                            conversation_id,
+                            title,
+                        },
+                        SignalEvent::Disconnected { reason } => {
+                            UiMessage::Disconnected { reason }
+                        }
+                    };
+                    if ui_tx.send(msg).is_err() {
+                        return;
+                    }
+                }
+
+                // signal_rx closed without a Disconnected event (shouldn't
+                // happen normally, but handle it defensively)
+                let _ = ui_tx.send(UiMessage::Disconnected {
+                    reason: "Connection lost".to_string(),
+                });
+            }
+            Err(e) => {
+                if ui_tx
+                    .send(UiMessage::Disconnected {
+                        reason: format!("Connection failed: {e}"),
+                    })
+                    .is_err()
+                {
+                    return;
                 }
             }
-        });
+        }
+
+        // Backoff before reconnect
+        if ui_tx
+            .send(UiMessage::StatusUpdate(format!(
+                "Reconnecting in {backoff_secs}s..."
+            )))
+            .is_err()
+        {
+            return;
+        }
+
+        tokio::time::sleep(std::time::Duration::from_secs(backoff_secs)).await;
+        backoff_secs = (backoff_secs * 2).min(MAX_BACKOFF_SECS);
     }
 }

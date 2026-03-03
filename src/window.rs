@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use desktop_assistant_client_common::{
     AssistantClient, ChatMessage, ConnectionConfig, ConversationDetail, ConversationSummary,
-    TransportClient, connect_transport, transport::transport_label,
+    TransportClient,
 };
 use gtk4::prelude::*;
 use gtk4::{
@@ -13,7 +13,7 @@ use gtk4::{
 };
 use tokio::sync::mpsc;
 
-use crate::async_bridge::{AsyncBridge, UiMessage};
+use crate::async_bridge::{AsyncBridge, InternalMsg, UiMessage, connection_manager};
 use crate::widgets::chat_view::ChatView;
 use crate::widgets::input_bar::InputBar;
 use crate::widgets::sidebar::Sidebar;
@@ -28,13 +28,7 @@ struct WindowState {
     debug_enabled: bool,
 }
 
-/// Internal message for bootstrapping the transport client on the main thread.
-enum InternalMsg {
-    TransportReady {
-        client: Arc<TransportClient>,
-        signal_rx: mpsc::UnboundedReceiver<desktop_assistant_client_common::SignalEvent>,
-    },
-}
+// InternalMsg is now defined in async_bridge and re-imported.
 
 pub struct AdelieWindow {
     pub window: ApplicationWindow,
@@ -82,6 +76,7 @@ impl AdelieWindow {
         right_box.append(&input_sep);
 
         let input_bar = InputBar::new();
+        input_bar.send_button.set_sensitive(false); // disabled until connected
         right_box.append(&input_bar.container);
 
         let status_bar = GtkBox::new(Orientation::Horizontal, 0);
@@ -136,9 +131,19 @@ impl AdelieWindow {
             let sidebar = Rc::clone(&sidebar);
             let chat_view = Rc::clone(&chat_view);
             let status_label = Rc::clone(&status_label);
+            let client = Rc::clone(&client);
+            let input_bar = Rc::clone(&input_bar);
 
             AsyncBridge::new(move |msg| {
-                handle_ui_message(msg, &state, &sidebar, &chat_view, &status_label);
+                handle_ui_message(
+                    msg,
+                    &state,
+                    &sidebar,
+                    &chat_view,
+                    &status_label,
+                    &client,
+                    &input_bar,
+                );
             })
         };
         let bridge = Rc::new(bridge);
@@ -146,57 +151,21 @@ impl AdelieWindow {
         // Spawn a local future to receive the transport client on the main thread
         {
             let client_ref = Rc::clone(&client);
-            let bridge_ref = Rc::clone(&bridge);
             glib::spawn_future_local(async move {
                 while let Some(msg) = internal_rx.recv().await {
                     match msg {
-                        InternalMsg::TransportReady {
-                            client: transport,
-                            signal_rx,
-                        } => {
+                        InternalMsg::ClientReady(transport) => {
                             *client_ref.borrow_mut() = Some(transport);
-                            bridge_ref.forward_signals(signal_rx);
                         }
                     }
                 }
             });
         }
 
-        // Connect transport on startup
+        // Spawn persistent connection manager (connect → forward → reconnect)
         {
-            let tx = bridge.ui_sender();
-            let config = config.clone();
-            bridge.spawn(async move {
-                match connect_transport(&config).await {
-                    Ok((transport, signal_rx)) => {
-                        let transport = Arc::new(transport);
-
-                        let _ = tx.send(UiMessage::StatusUpdate(
-                            transport_label(config.transport_mode).to_string(),
-                        ));
-
-                        // Send client + signal_rx to GTK thread via internal channel
-                        let _ = internal_tx.send(InternalMsg::TransportReady {
-                            client: Arc::clone(&transport),
-                            signal_rx,
-                        });
-
-                        // List conversations
-                        match transport.list_conversations().await {
-                            Ok(convs) => {
-                                let _ = tx.send(UiMessage::ConversationsLoaded(convs));
-                            }
-                            Err(e) => {
-                                let _ =
-                                    tx.send(UiMessage::Error(format!("Load conversations: {e}")));
-                            }
-                        }
-                    }
-                    Err(e) => {
-                        let _ = tx.send(UiMessage::Error(format!("Connection failed: {e}")));
-                    }
-                }
-            });
+            let ui_tx = bridge.ui_sender();
+            bridge.spawn(connection_manager(config.clone(), ui_tx, internal_tx));
         }
 
         // Sidebar row activation → load conversation
@@ -499,6 +468,8 @@ fn handle_ui_message(
     sidebar: &Rc<Sidebar>,
     chat_view: &Rc<RefCell<ChatView>>,
     status_label: &Rc<Label>,
+    client: &Rc<RefCell<Option<Arc<TransportClient>>>>,
+    input_bar: &Rc<InputBar>,
 ) {
     match msg {
         UiMessage::ConversationsLoaded(convs) => {
@@ -618,6 +589,34 @@ fn handle_ui_message(
         }
         UiMessage::Error(text) => {
             status_label.set_text(&format!("Error: {text}"));
+        }
+        UiMessage::Connected { label } => {
+            status_label.set_text(&label);
+            input_bar.send_button.set_sensitive(true);
+        }
+        UiMessage::Disconnected { reason } => {
+            *client.borrow_mut() = None;
+            input_bar.send_button.set_sensitive(false);
+            status_label.set_text(&format!("Disconnected: {reason}"));
+
+            // Finalize any in-progress streaming buffer
+            let mut s = state.borrow_mut();
+            if s.pending_request_id.is_some() {
+                s.pending_request_id = None;
+                if !s.streaming_buffer.is_empty() {
+                    s.streaming_buffer.push_str("\n\n[Connection lost]");
+                    let full = s.streaming_buffer.clone();
+                    s.streaming_buffer.clear();
+                    if let Some(ref mut conv) = s.current_conversation {
+                        conv.messages.push(ChatMessage {
+                            role: "assistant".to_string(),
+                            content: full.clone(),
+                        });
+                    }
+                    drop(s);
+                    chat_view.borrow_mut().complete_streaming(&full);
+                }
+            }
         }
     }
 }
