@@ -1,0 +1,8 @@
+[Desktop Entry]
+Name=Adele
+Comment=Adelie Platform GTK Client
+Exec=adelie-gtk
+Icon=adelie-gtk
+Terminal=false
+Type=Application
+Categories=Utility;
