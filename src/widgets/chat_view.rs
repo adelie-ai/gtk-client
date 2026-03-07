@@ -101,6 +101,20 @@ impl ChatView {
         self.render();
     }
 
+    /// Show a transient status message (e.g. "Searching knowledge base...").
+    pub fn set_status(&self, message: &str) {
+        #[cfg(feature = "linux")]
+        crate::webview::set_status(&self.webview, message);
+
+        // Non-linux fallback: no-op (status shown in status bar instead)
+    }
+
+    /// Clear the transient status indicator.
+    pub fn clear_status(&self) {
+        #[cfg(feature = "linux")]
+        crate::webview::clear_status(&self.webview);
+    }
+
     /// Add a user message to the display.
     pub fn add_user_message(&mut self, content: &str) {
         self.messages

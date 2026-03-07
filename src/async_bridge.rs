@@ -49,6 +49,10 @@ pub enum UiMessage {
         request_id: String,
         error: String,
     },
+    AssistantStatus {
+        request_id: String,
+        message: String,
+    },
     TitleChanged {
         conversation_id: String,
         title: String,
@@ -176,6 +180,13 @@ pub async fn connection_manager(
                         SignalEvent::Error { request_id, error } => {
                             UiMessage::StreamError { request_id, error }
                         }
+                        SignalEvent::Status {
+                            request_id,
+                            message,
+                        } => UiMessage::AssistantStatus {
+                            request_id,
+                            message,
+                        },
                         SignalEvent::TitleChanged {
                             conversation_id,
                             title,

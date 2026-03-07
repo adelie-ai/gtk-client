@@ -525,6 +525,18 @@ fn handle_ui_message(
             }
             s.streaming_buffer.clear();
         }
+        UiMessage::AssistantStatus {
+            request_id,
+            message,
+        } => {
+            let s = state.borrow();
+            if s.pending_request_id.as_deref() == Some(&request_id)
+                || s.pending_request_id.as_deref() == Some("__pending__")
+            {
+                drop(s);
+                chat_view.borrow().set_status(&message);
+            }
+        }
         UiMessage::StreamChunk { request_id, chunk } => {
             let mut s = state.borrow_mut();
             // Claim request ID if pending
@@ -532,8 +544,12 @@ fn handle_ui_message(
                 s.pending_request_id = Some(request_id.clone());
             }
             if s.pending_request_id.as_deref() == Some(&request_id) {
+                let first_chunk = s.streaming_buffer.is_empty();
                 s.streaming_buffer.push_str(&chunk);
                 drop(s);
+                if first_chunk {
+                    chat_view.borrow().clear_status();
+                }
                 chat_view.borrow_mut().receive_chunk(&chunk);
             }
         }
@@ -555,6 +571,9 @@ fn handle_ui_message(
                     });
                 }
                 drop(s);
+                let cv = chat_view.borrow();
+                cv.clear_status();
+                drop(cv);
                 chat_view.borrow_mut().complete_streaming(&full_response);
             }
         }
@@ -567,6 +586,7 @@ fn handle_ui_message(
                 s.pending_request_id = None;
                 s.streaming_buffer.clear();
                 drop(s);
+                chat_view.borrow().clear_status();
                 status_label.set_text(&format!("Error: {error}"));
             }
         }

@@ -65,6 +65,27 @@ pub fn append_chunk(webview: &WebView, chunk: &str) {
     webview.evaluate_javascript(&js, None, None, None::<&gtk4::gio::Cancellable>, |_| {});
 }
 
+/// Show a transient status message below the chat (e.g. "Searching knowledge base...").
+pub fn set_status(webview: &WebView, message: &str) {
+    let escaped = message
+        .replace('\\', "\\\\")
+        .replace('`', "\\`")
+        .replace("${", "\\${");
+    let js = format!("setStatus(`{escaped}`);");
+    webview.evaluate_javascript(&js, None, None, None::<&gtk4::gio::Cancellable>, |_| {});
+}
+
+/// Clear the transient status indicator.
+pub fn clear_status(webview: &WebView) {
+    webview.evaluate_javascript(
+        "clearStatus();",
+        None,
+        None,
+        None::<&gtk4::gio::Cancellable>,
+        |_| {},
+    );
+}
+
 /// Scroll the webview to the bottom.
 pub fn scroll_to_bottom(webview: &WebView) {
     webview.evaluate_javascript(

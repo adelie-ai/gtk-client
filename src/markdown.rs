@@ -163,10 +163,38 @@ body {
 @keyframes blink {
     50% { opacity: 0; }
 }
+
+#status-indicator {
+    display: none;
+    padding: 8px 16px;
+    color: #9ca3af;
+    font-size: 13px;
+    font-style: italic;
+}
+
+#status-indicator.visible {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+#status-indicator .dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: #84dac1;
+    animation: pulse 1.5s ease-in-out infinite;
+}
+
+@keyframes pulse {
+    0%, 100% { opacity: 0.4; }
+    50% { opacity: 1; }
+}
 </style>
 </head>
 <body>
 <div id="messages"></div>
+<div id="status-indicator"><span class="dot"></span><span id="status-text"></span></div>
 <script>
 function updateMessages(html) {
     document.getElementById('messages').innerHTML = html;
@@ -186,6 +214,17 @@ function appendChunk(text) {
     // Append raw text (for streaming, we accumulate and re-render on complete)
     streaming.textContent += text;
     scrollToBottom();
+}
+
+function setStatus(message) {
+    let el = document.getElementById('status-indicator');
+    document.getElementById('status-text').textContent = message;
+    el.classList.add('visible');
+    scrollToBottom();
+}
+
+function clearStatus() {
+    document.getElementById('status-indicator').classList.remove('visible');
 }
 
 function scrollToBottom() {
