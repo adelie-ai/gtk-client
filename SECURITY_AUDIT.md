@@ -67,14 +67,6 @@ When a new refresh token is stored, the old one is not explicitly deleted first.
 
 ---
 
-## Resolved (2026-03-31)
-
-- Content Security Policy — strict CSP meta tag added to WebView template
-- JavaScript string injection — replaced template-literal escaping with `serde_json::to_string()`
-- Temp file TOCTOU — atomic `create_new(true)` + XDG cache dir
-- CLI credential removal — `--ws-jwt`/`--ws-login-*` args and env vars removed
-- Avatar URL escaping — HTML entity encoding for `src` and `alt` attributes
-
 ## Positive Findings
 
 - Credential storage uses system keyring via the `keyring` crate
