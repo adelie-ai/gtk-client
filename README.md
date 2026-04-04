@@ -1,18 +1,14 @@
-# Adelie GTK Client
+# Adele GTK
 
 GTK4-based desktop client for the Adelie Desktop Assistant.
 
-## Building
+## Requirements
 
-### Prerequisites
+- Rust toolchain (edition 2024, Rust 1.85+)
+- GTK4 and WebKitGTK 6.0 system libraries
+- A running `desktop-assistant-daemon` instance
 
-**Rust toolchain** (edition 2024, Rust 1.85+):
-
-```sh
-rustup update stable
-```
-
-**System libraries:**
+### System libraries
 
 | Distro | Packages |
 |--------|----------|
@@ -20,16 +16,9 @@ rustup update stable
 | Fedora | `gtk4-devel webkitgtk6.0-devel` |
 | Debian / Ubuntu | `libgtk-4-dev libwebkitgtk-6.0-dev` |
 
-On Arch:
+## Build
 
 ```sh
-sudo pacman -S gtk4 webkitgtk-6.0
-```
-
-### Build
-
-```sh
-cd gtk-client
 cargo build
 ```
 
@@ -39,15 +28,33 @@ To build without WebKitGTK (Label-based fallback instead of webview):
 cargo build --no-default-features
 ```
 
-### Run
+## Install
 
-The daemon (`desktop-assistant-daemon`) must be running first.
+Install binary, desktop entry, and icon:
 
 ```sh
-cargo run
+just install
 ```
 
-#### CLI options
+Or install just the desktop entry and icon (if the binary is already installed):
+
+```sh
+just install-desktop
+```
+
+To remove the desktop entry and icon:
+
+```sh
+just uninstall-desktop
+```
+
+## Run
+
+```sh
+adele-gtk
+```
+
+### CLI options
 
 | Flag | Env var | Default | Description |
 |------|---------|---------|-------------|
@@ -58,7 +65,7 @@ cargo run
 | `--ws-login-password` | `ADELIE_GTK_WS_LOGIN_PASSWORD` | | Login password |
 | `--ws-subject` | `ADELIE_GTK_WS_SUBJECT` | `desktop-tui` | JWT subject |
 
-### Test
+## Test
 
 ```sh
 cargo test
