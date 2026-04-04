@@ -28,7 +28,7 @@ impl ProfileStore {
     pub fn new() -> Self {
         let config_dir = dirs::config_dir()
             .unwrap_or_else(|| PathBuf::from("."))
-            .join("adelie-gtk");
+            .join("adele-gtk");
         Self {
             path: config_dir.join("profiles.json"),
         }

@@ -53,7 +53,7 @@ impl LoginScreen {
         const ICON_BYTES: &[u8] = include_bytes!("../../assets/adele_communicating.png");
         let icon_path = dirs::cache_dir()
             .unwrap_or_else(std::env::temp_dir)
-            .join("adelie-gtk-brand-icon.png");
+            .join("adele-gtk-brand-icon.png");
         if let Err(e) = std::fs::OpenOptions::new()
             .write(true)
             .create_new(true)

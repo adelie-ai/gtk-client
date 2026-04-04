@@ -778,7 +778,7 @@ pub fn install_app_icon() {
 
     let cache_root = dirs::cache_dir()
         .unwrap_or_else(std::env::temp_dir)
-        .join("adelie-gtk-icons");
+        .join("adele-gtk-icons");
     let icon_dir = cache_root
         .join("hicolor")
         .join("512x512")

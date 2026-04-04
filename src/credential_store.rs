@@ -1,6 +1,6 @@
 use anyhow::Result;
 
-const SERVICE_NAME: &str = "adelie-gtk";
+const SERVICE_NAME: &str = "adele-gtk";
 
 pub struct CredentialStore;
 

@@ -28,7 +28,7 @@ enum CliTransportMode {
 }
 
 #[derive(Debug, Parser)]
-#[command(name = "adelie-gtk")]
+#[command(name = "adele-gtk")]
 struct CliArgs {
     #[arg(
         long,

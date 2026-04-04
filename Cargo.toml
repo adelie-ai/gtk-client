@@ -1,11 +1,11 @@
 [package]
-name = "adelie-gtk"
+name = "adele-gtk"
 version = "0.1.0"
 edition = "2024"
 license = "AGPL-3.0-or-later"
 
 [[bin]]
-name = "adelie-gtk"
+name = "adele-gtk"
 path = "src/main.rs"
 
 [features]
