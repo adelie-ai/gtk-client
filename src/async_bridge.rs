@@ -143,7 +143,7 @@ pub async fn connection_manager(
                 backoff_secs = INITIAL_BACKOFF_SECS;
                 let transport = Arc::new(transport);
 
-                let label = transport_label(config.transport_mode).to_string();
+                let label = transport_label(&config);
                 if ui_tx.send(UiMessage::Connected { label }).is_err() {
                     return;
                 }
