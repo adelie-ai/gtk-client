@@ -83,6 +83,7 @@ impl From<CliArgs> for ConnectionConfig {
             ws_login_username: None,
             ws_login_password: None,
             ws_subject,
+            ..Default::default()
         }
     }
 }

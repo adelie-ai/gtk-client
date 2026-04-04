@@ -368,6 +368,7 @@ async fn connect_to_profile(
                             ws_login_username: None,
                             ws_login_password: None,
                             ws_subject: profile.ws_subject.clone(),
+                            ..Default::default()
                         });
                     }
                     Err(e) => {
@@ -392,6 +393,7 @@ async fn connect_to_profile(
                 ws_login_username: None,
                 ws_login_password: None,
                 ws_subject: profile.ws_subject.clone(),
+                ..Default::default()
             });
         }
     }
@@ -410,6 +412,7 @@ async fn connect_to_profile(
             ws_login_username: username,
             ws_login_password: password,
             ws_subject: profile.ws_subject.clone(),
+            ..Default::default()
         });
     }
 
