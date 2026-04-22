@@ -1,5 +1,6 @@
 pub mod chat_view;
 pub mod connection_config_dialog;
+pub mod connections_tab;
 pub mod input_bar;
 pub mod login_screen;
 pub mod model_selector;
