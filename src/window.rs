@@ -2,6 +2,7 @@ use std::cell::RefCell;
 use std::rc::Rc;
 use std::sync::Arc;
 
+use desktop_assistant_api_model as api;
 use desktop_assistant_client_common::{
     AssistantClient, ChatMessage, ConnectionConfig, ConversationDetail, ConversationSummary,
     TransportClient,
@@ -9,13 +10,18 @@ use desktop_assistant_client_common::{
 use gtk4::prelude::*;
 use gtk4::{
     Align, Application, ApplicationWindow, Box as GtkBox, Button, CheckButton, Entry, Label,
-    MenuButton, Orientation, Paned, Popover, Separator, Window, gdk, glib,
+    MenuButton, Orientation, Paned, Popover, Revealer, RevealerTransitionType, Separator, Window,
+    gdk, glib,
 };
 use tokio::sync::mpsc;
 
-use crate::async_bridge::{AsyncBridge, InternalMsg, UiMessage, connection_manager};
+use crate::async_bridge::{AsyncBridge, InternalMsg, UiMessage, connection_manager, spawn_on_runtime};
+use crate::management_client;
+use crate::selection_store::{SelectionStore, StoredSelection};
 use crate::widgets::chat_view::ChatView;
 use crate::widgets::input_bar::InputBar;
+use crate::widgets::model_selector::ModelSelector;
+use crate::widgets::settings_dialog;
 use crate::widgets::sidebar::Sidebar;
 
 /// Shared mutable state for the window.
@@ -90,6 +96,11 @@ impl AdelieWindow {
         menu_popover.add_css_class("context-popover");
         let menu_box = GtkBox::new(Orientation::Vertical, 0);
 
+        let settings_btn = Button::with_label("Settings");
+        settings_btn.add_css_class("context-button");
+        settings_btn.set_halign(Align::Fill);
+        menu_box.append(&settings_btn);
+
         let new_conn_btn = Button::with_label("New Connection");
         new_conn_btn.add_css_class("context-button");
         new_conn_btn.set_halign(Align::Fill);
@@ -112,8 +123,38 @@ impl AdelieWindow {
         let chat_view = ChatView::new();
         right_box.append(&chat_view.container);
 
+        // Passive toast for advisory warnings (e.g. dangling model
+        // selection). The revealer is always in the layout; we reveal it
+        // with a message when something needs attention.
+        let toast_revealer = Revealer::new();
+        toast_revealer.set_transition_type(RevealerTransitionType::SlideUp);
+        toast_revealer.set_reveal_child(false);
+        let toast_row = GtkBox::new(Orientation::Horizontal, 8);
+        toast_row.add_css_class("toast-row");
+        toast_row.set_margin_start(12);
+        toast_row.set_margin_end(12);
+        toast_row.set_margin_top(6);
+        toast_row.set_margin_bottom(6);
+        let toast_label = Label::new(None);
+        toast_label.set_halign(Align::Start);
+        toast_label.set_hexpand(true);
+        toast_label.set_wrap(true);
+        toast_row.append(&toast_label);
+        let toast_dismiss = Button::from_icon_name("window-close-symbolic");
+        toast_dismiss.add_css_class("flat");
+        {
+            let revealer_ref = toast_revealer.clone();
+            toast_dismiss.connect_clicked(move |_| revealer_ref.set_reveal_child(false));
+        }
+        toast_row.append(&toast_dismiss);
+        toast_revealer.set_child(Some(&toast_row));
+        right_box.append(&toast_revealer);
+
         let input_sep = Separator::new(Orientation::Horizontal);
         right_box.append(&input_sep);
+
+        let model_selector = ModelSelector::new();
+        right_box.append(&model_selector.container);
 
         let input_bar = InputBar::new();
         input_bar.send_button.set_sensitive(false); // disabled until connected
@@ -153,11 +194,17 @@ impl AdelieWindow {
             debug_enabled: false,
         }));
 
+        // Per-conversation model selection mirror (disk-backed).
+        let selection_store = Rc::new(SelectionStore::new());
+
         // Wrap widgets in Rc for closures
         let sidebar = Rc::new(sidebar);
         let chat_view = Rc::new(RefCell::new(chat_view));
         let input_bar = Rc::new(input_bar);
         let status_label = Rc::new(status_label);
+        let model_selector = Rc::new(model_selector);
+        let toast_revealer = Rc::new(toast_revealer);
+        let toast_label = Rc::new(toast_label);
 
         // Client wrapped in Arc for async tasks, Rc<RefCell<>> for GTK thread
         let client: Rc<RefCell<Option<Arc<TransportClient>>>> = Rc::new(RefCell::new(None));
@@ -173,6 +220,10 @@ impl AdelieWindow {
             let status_label = Rc::clone(&status_label);
             let client = Rc::clone(&client);
             let input_bar = Rc::clone(&input_bar);
+            let model_selector = Rc::clone(&model_selector);
+            let toast_revealer = Rc::clone(&toast_revealer);
+            let toast_label = Rc::clone(&toast_label);
+            let selection_store = Rc::clone(&selection_store);
 
             AsyncBridge::new(move |msg| {
                 handle_ui_message(
@@ -183,6 +234,10 @@ impl AdelieWindow {
                     &status_label,
                     &client,
                     &input_bar,
+                    &model_selector,
+                    &toast_revealer,
+                    &toast_label,
+                    &selection_store,
                 );
             })
         };
@@ -208,7 +263,9 @@ impl AdelieWindow {
             bridge.spawn(connection_manager(config.clone(), ui_tx, internal_tx));
         }
 
-        // Sidebar row activation → load conversation
+        // Sidebar row activation → load conversation (with warnings via
+        // the raw ConversationView, so dangling selection advisories are
+        // surfaced).
         {
             let client_ref = Rc::clone(&client);
             let state = Rc::clone(&state);
@@ -223,9 +280,29 @@ impl AdelieWindow {
                     if let Some(client) = client_ref.borrow().clone() {
                         let tx = bridge.ui_sender();
                         bridge.spawn(async move {
-                            match client.get_conversation(&conv_id).await {
-                                Ok(detail) => {
+                            match management_client::get_conversation_view(&client, &conv_id).await
+                            {
+                                Ok(view) => {
+                                    let warnings = view.warnings.clone();
+                                    let detail = desktop_assistant_client_common::ConversationDetail {
+                                        id: view.id.clone(),
+                                        title: view.title,
+                                        messages: view
+                                            .messages
+                                            .into_iter()
+                                            .map(|m| desktop_assistant_client_common::ChatMessage {
+                                                role: m.role,
+                                                content: m.content,
+                                            })
+                                            .collect(),
+                                    };
                                     let _ = tx.send(UiMessage::ConversationLoaded(detail));
+                                    for w in warnings {
+                                        let _ = tx.send(UiMessage::ConversationWarning {
+                                            conversation_id: view.id.clone(),
+                                            warning: w,
+                                        });
+                                    }
                                 }
                                 Err(e) => {
                                     let _ = tx
@@ -454,13 +531,16 @@ impl AdelieWindow {
             });
         }
 
-        // Send button / Enter key → send prompt
+        // Send button / Enter key → send prompt (with optional per-send
+        // model override).
         {
             let client_ref = Rc::clone(&client);
             let bridge_ref = Rc::clone(&bridge);
             let state = Rc::clone(&state);
             let input_bar_ref = Rc::clone(&input_bar);
             let chat_view_ref = Rc::clone(&chat_view);
+            let model_selector_ref = Rc::clone(&model_selector);
+            let selection_store_ref = Rc::clone(&selection_store);
 
             let send_action = Rc::new(move || {
                 let text = input_bar_ref.take_text();
@@ -474,6 +554,12 @@ impl AdelieWindow {
                     None => return,
                 };
                 drop(state_borrow);
+
+                // Resolve the override: prefer the live dropdown selection;
+                // fall back to the conversation's stored selection.
+                let override_selection = model_selector_ref
+                    .current_override()
+                    .or_else(|| selection_store_ref.get(&conv_id).map(|s| s.as_override()));
 
                 // Show user message immediately
                 chat_view_ref.borrow_mut().add_user_message(&text);
@@ -493,9 +579,21 @@ impl AdelieWindow {
                     let tx = bridge_ref.ui_sender();
                     let text = text.clone();
                     bridge_ref.spawn(async move {
-                        match client.send_prompt(&conv_id, &text).await {
-                            Ok(request_id) => {
-                                let _ = tx.send(UiMessage::PromptSent { request_id });
+                        let r = management_client::send_prompt_with_override(
+                            &client,
+                            conv_id,
+                            text,
+                            override_selection,
+                        )
+                        .await;
+                        match r {
+                            Ok(()) => {
+                                // WS ack doesn't carry a request id; use
+                                // the sentinel to claim the next stream
+                                // event.
+                                let _ = tx.send(UiMessage::PromptSent {
+                                    request_id: String::new(),
+                                });
                             }
                             Err(e) => {
                                 let _ = tx.send(UiMessage::Error(format!("Send error: {e}")));
@@ -526,6 +624,70 @@ impl AdelieWindow {
                 }
             });
             input_bar.text_view.add_controller(key_controller);
+        }
+
+        // Model selector: persist selection locally whenever the user
+        // changes it. The daemon side is updated implicitly on the next
+        // `SendMessage` call (which carries the override).
+        {
+            let state = Rc::clone(&state);
+            let selection_store = Rc::clone(&selection_store);
+            model_selector.connect_changed(move |override_selection| {
+                let Some(conv_id) = state.borrow().current_conversation_id.clone() else {
+                    return;
+                };
+                match override_selection {
+                    Some(o) => {
+                        selection_store.set(
+                            &conv_id,
+                            StoredSelection {
+                                connection_id: o.connection_id,
+                                model_id: o.model_id,
+                                effort: o.effort,
+                            },
+                        );
+                    }
+                    None => {
+                        selection_store.clear(&conv_id);
+                    }
+                }
+            });
+        }
+
+        // Hamburger menu: Settings → Connections / Purposes tabs.
+        {
+            let client_ref = Rc::clone(&client);
+            let bridge_ref = Rc::clone(&bridge);
+            let window_ref = window.clone();
+            let popover_ref = menu_popover.clone();
+            let model_selector_ref = Rc::clone(&model_selector);
+            settings_btn.connect_clicked(move |_| {
+                popover_ref.popdown();
+                settings_dialog::show_settings_dialog(
+                    &window_ref,
+                    Rc::clone(&client_ref),
+                    bridge_ref.ui_sender(),
+                );
+                // After the user potentially changes connections, refresh
+                // the model selector so it reflects the new set. Fire-and-
+                // forget — errors are non-fatal.
+                if let Some(transport) = client_ref.borrow().clone() {
+                    let tx = bridge_ref.ui_sender();
+                    let _ = &model_selector_ref; // captured for symmetry
+                    spawn_on_runtime(async move {
+                        match management_client::list_available_models(&transport, None, false)
+                            .await
+                        {
+                            Ok(listings) => {
+                                let _ = tx.send(UiMessage::ModelsLoaded(listings));
+                            }
+                            Err(e) => {
+                                tracing::warn!("Failed to refresh models after settings: {e}");
+                            }
+                        }
+                    });
+                }
+            });
         }
 
         // Hamburger menu: New Connection → open login screen in a new window
@@ -596,6 +758,10 @@ fn handle_ui_message(
     status_label: &Rc<Label>,
     client: &Rc<RefCell<Option<Arc<TransportClient>>>>,
     input_bar: &Rc<InputBar>,
+    model_selector: &Rc<ModelSelector>,
+    toast_revealer: &Rc<Revealer>,
+    toast_label: &Rc<Label>,
+    selection_store: &Rc<SelectionStore>,
 ) {
     match msg {
         UiMessage::ConversationsLoaded(convs) => {
@@ -608,9 +774,18 @@ fn handle_ui_message(
             let filtered = filter_messages(&detail, debug);
             let mut s = state.borrow_mut();
             s.current_conversation = Some(detail);
-            s.current_conversation_id = Some(id);
+            s.current_conversation_id = Some(id.clone());
             drop(s);
             chat_view.borrow_mut().load_conversation(&filtered);
+
+            // Hydrate the model selector from the locally-persisted
+            // per-conversation selection (if any). The daemon doesn't
+            // currently echo its own `last_model_selection` on
+            // GetConversation — we mirror it client-side and the daemon
+            // falls back to the interactive purpose when our override is
+            // absent.
+            let stored_override = selection_store.get(&id).map(|s| s.as_override());
+            model_selector.select_override(stored_override.as_ref());
         }
         UiMessage::ConversationCreated { id } => {
             state.borrow_mut().current_conversation_id = Some(id);
@@ -729,6 +904,49 @@ fn handle_ui_message(
             let convs = s.conversations.clone();
             drop(s);
             sidebar.set_conversations(&convs);
+        }
+        UiMessage::ConversationWarning {
+            conversation_id,
+            warning,
+        } => {
+            // Single variant today — DanglingModelSelection. The daemon
+            // has already cleared its side; clear ours too and surface a
+            // passive toast so the user knows why their "stuck" model is
+            // no longer stuck.
+            match &warning {
+                api::ConversationWarning::DanglingModelSelection {
+                    previous_selection,
+                    fallback_to,
+                } => {
+                    selection_store.clear(&conversation_id);
+                    // If this is the currently-open conversation, also
+                    // reset the selector so it doesn't show stale state.
+                    let is_current = state.borrow().current_conversation_id.as_deref()
+                        == Some(conversation_id.as_str());
+                    if is_current {
+                        model_selector.select_override(None);
+                    }
+                    let message = format!(
+                        "The model \"{}\" on connection \"{}\" is no longer available — falling back to \"{}\" on \"{}\".",
+                        previous_selection.model_id,
+                        previous_selection.connection_id,
+                        fallback_to.model_id,
+                        fallback_to.connection_id,
+                    );
+                    toast_label.set_text(&message);
+                    toast_revealer.set_reveal_child(true);
+                }
+            }
+        }
+        UiMessage::ModelsLoaded(listings) => {
+            model_selector.set_models(&listings);
+            // Re-hydrate from the current conversation's stored
+            // selection so that a freshly-populated dropdown still
+            // reflects user intent.
+            if let Some(conv_id) = state.borrow().current_conversation_id.clone() {
+                let stored_override = selection_store.get(&conv_id).map(|s| s.as_override());
+                model_selector.select_override(stored_override.as_ref());
+            }
         }
         UiMessage::StatusUpdate(text) => {
             status_label.set_text(&text);
