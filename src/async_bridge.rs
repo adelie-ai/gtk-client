@@ -2,6 +2,7 @@ use std::future::Future;
 use std::sync::Arc;
 use std::sync::OnceLock;
 
+use desktop_assistant_api_model as api;
 use desktop_assistant_client_common::SignalEvent;
 use desktop_assistant_client_common::{
     AssistantClient, ConnectionConfig, TransportClient, connect_transport,
@@ -57,6 +58,16 @@ pub enum UiMessage {
         conversation_id: String,
         title: String,
     },
+    /// A one-time advisory for a conversation (e.g. the stored model
+    /// selection no longer resolves and was cleared).
+    ConversationWarning {
+        conversation_id: String,
+        warning: api::ConversationWarning,
+    },
+    /// Aggregated model listings (across all healthy connections) from the
+    /// most recent `ListAvailableModels` call — used to repopulate the
+    /// per-conversation model selector.
+    ModelsLoaded(Vec<api::ModelListing>),
     PromptSent {
         request_id: String,
     },
@@ -172,6 +183,27 @@ pub async fn connection_manager(
                     }
                 }
 
+                // Refresh aggregated model list so the per-conversation
+                // selector can populate. Failure is non-fatal — the
+                // dropdown simply stays empty.
+                if let Some(ws) = transport.as_ws() {
+                    match ws
+                        .send_command(api::Command::ListAvailableModels {
+                            connection_id: None,
+                            refresh: false,
+                        })
+                        .await
+                    {
+                        Ok(api::CommandResult::Models(listings)) => {
+                            let _ = ui_tx.send(UiMessage::ModelsLoaded(listings));
+                        }
+                        Ok(_) => {}
+                        Err(e) => {
+                            tracing::warn!("Failed to list available models: {e}");
+                        }
+                    }
+                }
+
                 // Forward signals until disconnect
                 while let Some(signal) = signal_rx.recv().await {
                     let msg = match signal {
@@ -201,6 +233,13 @@ pub async fn connection_manager(
                         } => UiMessage::TitleChanged {
                             conversation_id,
                             title,
+                        },
+                        SignalEvent::ConversationWarning {
+                            conversation_id,
+                            warning,
+                        } => UiMessage::ConversationWarning {
+                            conversation_id,
+                            warning,
                         },
                         SignalEvent::Disconnected { reason } => UiMessage::Disconnected { reason },
                     };
